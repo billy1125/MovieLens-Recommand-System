@@ -44,6 +44,10 @@ class PreprocessConfig:
     include_zip: bool = False
     zip_prefix_len: int = 3 # 若啟用，僅取前三碼（區域代表性較強）
 
+    # 輸出格式設定
+    output_format: str = "parquet"   # "parquet" or "csv"
+    parquet_engine: str = "pyarrow"  # 或 "fastparquet"，依據環境來選擇
+
 
 @dataclass
 class Encoders:
@@ -165,17 +169,17 @@ def build_demo_vocabs(
     將類別型特徵（如性別 M/F）轉為整數索引。
     """
     gender_vocab = {g: i for i, g in enumerate(sorted(users["gender"].unique()))}
-    age_vocab = {a: i for i, a in enumerate(sorted(users["age"].unique()))}
-    occupation_vocab = {
-        o: i for i, o in enumerate(sorted(users["occupation"].unique()))
-    }
+    age_vocab = {int(a): i for i, a in enumerate(sorted(users["age"].unique()))}
+    occupation_vocab = {int(o): i for i, o in enumerate(sorted(users["occupation"].unique()))}
 
     zip_vocab = None
     zip_feat = pd.Series([None] * len(users), index=users.index)
 
     # 選擇性處理郵遞區號
     if include_zip:
-        zip_feat = users["Zip"].str.slice(0, zip_prefix_len) # 只取前幾碼
+        # zip_feat = users["Zip"].str.slice(0, zip_prefix_len) # 只取前幾碼
+        zip_feat = users["zip"].str.slice(0, zip_prefix_len) # 只取前幾碼
+
         zip_vocab = {z: i for i, z in enumerate(sorted(zip_feat.unique()))}
 
     return gender_vocab, age_vocab, occupation_vocab, zip_vocab, zip_feat
@@ -202,8 +206,8 @@ def build_genre_vocab_and_multihot(movies: pd.DataFrame):
 
     # 將 Multi-hot 矩陣轉為 DataFrame 方便後續合併
     genre_cols = [f"genre_{g}" for g in all_genres]
-    multihot_df = pd.DataFrame(multihot, columns=genre_cols)
-
+    multihot_df = pd.DataFrame(multihot, columns=genre_cols, index=movies.index)
+    
     movies = movies.copy()
     movies["genres_list"] = genres_list
 
@@ -279,6 +283,9 @@ def preprocess_ml_1m(cfg: PreprocessConfig):
     # 建立人口統計特徵詞彙表
     gender_vocab, age_vocab, occupation_vocab, zip_vocab, zip_prefix = \
         build_demo_vocabs(users_df, cfg.include_zip, cfg.zip_prefix_len)
+    
+    if cfg.include_zip:
+        users_df["zip_prefix"] = zip_prefix
 
     # 5. 處理電影資料表 (加入 Multi-hot 類型)
     movies_df = movies.rename(columns={
@@ -311,7 +318,6 @@ def preprocess_ml_1m(cfg: PreprocessConfig):
 
     return ratings_df, users_df, movies_df, train_df, test_df, encoders
 
-
 def save_artifacts(cfg: PreprocessConfig,
                    ratings_df: pd.DataFrame,
                    users_df: pd.DataFrame,
@@ -325,12 +331,14 @@ def save_artifacts(cfg: PreprocessConfig,
     """
     os.makedirs(cfg.output_dir, exist_ok=True)
 
-    # 儲存資料表為 CSV (實務上大數據推薦使用 Parquet)
-    ratings_df.to_csv(os.path.join(cfg.output_dir, "ratings.csv"), index=False)
-    users_df.to_csv(os.path.join(cfg.output_dir, "users.csv"), index=False)
-    movies_df.to_csv(os.path.join(cfg.output_dir, "movies.csv"), index=False)
-    train_df.to_csv(os.path.join(cfg.output_dir, "train.csv"), index=False)
-    test_df.to_csv(os.path.join(cfg.output_dir, "test.csv"), index=False)
+    fmt = cfg.output_format.lower()
+
+    # 儲存資料
+    _save_df(ratings_df, os.path.join(cfg.output_dir, "ratings"), fmt, cfg.parquet_engine)
+    _save_df(users_df,   os.path.join(cfg.output_dir, "users"),   fmt, cfg.parquet_engine)
+    _save_df(movies_df,  os.path.join(cfg.output_dir, "movies"),  fmt, cfg.parquet_engine)
+    _save_df(train_df,   os.path.join(cfg.output_dir, "train"),   fmt, cfg.parquet_engine)
+    _save_df(test_df,    os.path.join(cfg.output_dir, "test"),    fmt, cfg.parquet_engine)
 
     # 儲存編碼器供線上推論使用
     with open(os.path.join(cfg.output_dir, "encoders.json"), "w", encoding="utf-8") as f:
@@ -345,9 +353,19 @@ def save_artifacts(cfg: PreprocessConfig,
         "n_genres": int(len(encoders.genre_vocab)),
         "include_zip": cfg.include_zip,
         "zip_prefix_len": cfg.zip_prefix_len if cfg.include_zip else None,
+        "output_format": fmt,
     }
     with open(os.path.join(cfg.output_dir, "meta.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
+
+# 儲存資料
+def _save_df(df: pd.DataFrame, path_no_ext: str, fmt: str, engine: str = "pyarrow") -> None:
+    if fmt == "csv":
+        df.to_csv(path_no_ext + ".csv", index=False)
+    elif fmt == "parquet":
+        df.to_parquet(path_no_ext + ".parquet", index=False, engine=engine)
+    else:
+        raise ValueError(f"Unsupported output_format: {fmt}")
 
 
 # ============================================================
@@ -360,7 +378,9 @@ if __name__ == "__main__":
         output_dir="artifacts/preprocess",
         seed=42,
         test_ratio=0.2,
-        include_zip=False
+        include_zip=False,
+        output_format="parquet",      # "parquet" or "csv"
+        parquet_engine="pyarrow"
     )
 
     # 執行前處理
