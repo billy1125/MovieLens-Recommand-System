@@ -70,7 +70,7 @@ class MFConfig:
     Matrix Factorization 訓練超參數設定。
     """
     latent_dim: int = 64          # embedding 維度 d
-    epochs: int = 20              # 訓練輪數
+    epochs: int = 20              # 訓練次數
     lr: float = 0.01              # learning rate
     reg: float = 0.02             # L2 正則化係數（同時作用於 U / V / bias）
     use_bias: bool = True         # 是否使用 user/movie bias + global mean
@@ -395,7 +395,7 @@ def train_and_save(
     mf_cfg: MFConfig,
 ) -> MFArtifacts:
     """
-    一站式入口：
+    訓練的主程式：
     - 載入模組一 artifacts
     - 訓練 MF
     - 存下 U/V/bias/config
